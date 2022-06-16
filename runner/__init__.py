@@ -6,6 +6,7 @@ from multiprocessing import Process
 import sys
 import logging
 import signal
+from time import time
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def start(module_name, argv, process_id=None):
     logging.basicConfig(level=logging.INFO, format=formatter)
     module_log = f'running module {module_name} {" ".join(argv)}'
     logger.info(f'Start {module_log}')
+    start_time = time()
     module = import_module(fixed_module_name(module_name))
 
     if process_id is not None:
@@ -116,6 +118,9 @@ def start(module_name, argv, process_id=None):
         run(module, *argv)
 
     logger.info(f'Finish {module_log}')
+
+    t = round(time() - start_time, 4)
+    logger.info(f'Spent: {t}s')
 
 
 def split_argv(argv):
