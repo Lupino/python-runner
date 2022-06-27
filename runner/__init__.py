@@ -7,6 +7,7 @@ import sys
 import logging
 import signal
 from time import time
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,29 @@ after_stop_events = []
 
 stop_event = None
 global_task = None
+
+
+def mod60(t):
+    return math.floor(t / 60), t % 60
+
+
+def pretty_time(t):
+    out = []
+    for i in range(2):
+        t, v = mod60(t)
+
+        v = f'0{v}'
+        out.append(v[-2:])
+
+        if t == 0:
+            break
+
+    if t < 10:
+        out.append('0' + str(t))
+    else:
+        out.append(str(t))
+    out.reverse()
+    return ':'.join(out)
 
 
 def sigint_handler(signal, frame):
@@ -121,6 +145,8 @@ def start(module_name, argv, process_id=None):
 
     t = round(time() - start_time, 4)
     logger.info(f'Spent: {t}s')
+    t = pretty_time(t)
+    logger.info(f'Spent: {t}')
 
 
 def split_argv(argv):
