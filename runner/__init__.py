@@ -8,27 +8,34 @@ import logging
 import signal
 from time import time
 import math
+from typing import List, Any, Optional, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
-before_start_events = []
-after_stop_events = []
+before_start_events: List[
+    Callable[[Any], None]
+    | Callable[[Any], Coroutine[Any, Any, None]],
+] = []
+after_stop_events: List[
+    Callable[[Any], None]
+    | Callable[[Any], Coroutine[Any, Any, None]],
+] = []
 
-stop_event = None
-global_task = None
+stop_event: Optional[asyncio.Event] = None
+global_task: Optional[asyncio.Task[Any]] = None
 
 
-def mod60(t):
+def mod60(t: int) -> tuple[int, int]:
     return math.floor(t / 60), t % 60
 
 
-def pretty_time(t):
+def pretty_time(t: int) -> str:
     out = []
     for i in range(2):
         t, v = mod60(t)
 
-        v = f'0{v}'
-        out.append(v[-2:])
+        v_s = f'0{v}'
+        out.append(v_s[-2:])
 
         if t == 0:
             break
@@ -41,19 +48,19 @@ def pretty_time(t):
     return ':'.join(out)
 
 
-def sigint_handler(signal, frame):
+def sigint_handler(signal: int, frame: Any) -> None:
     logger.error('KeyboardInterrupt Error')
-    if stop_event.is_set():
-        sys.exit(1)
-
     if stop_event:
+        if stop_event.is_set():
+            sys.exit(1)
+
         stop_event.set()
 
     if global_task:
         global_task.cancel()
 
 
-def fixed_module_name(module_name):
+def fixed_module_name(module_name: str) -> str:
     if os.path.isfile(module_name):
         if module_name.endswith('.py'):
             module_name = module_name[:-3]
@@ -66,15 +73,19 @@ def fixed_module_name(module_name):
     return module_name
 
 
-def before_start(evt):
+def before_start(
+    evt: Callable[[Any], None] | Callable[[Any], Coroutine[Any, Any, None]]
+) -> None:
     before_start_events.append(evt)
 
 
-def after_stop(evt):
+def after_stop(
+    evt: Callable[[Any], None] | Callable[[Any], Coroutine[Any, Any, None]]
+) -> None:
     after_stop_events.append(evt)
 
 
-async def aio_run(module, *argv):
+async def aio_run(module: Any, *argv: str) -> None:
     global stop_event
     global global_task
 
@@ -88,7 +99,7 @@ async def aio_run(module, *argv):
 
     stop_event = asyncio.Event()
 
-    async def main_task():
+    async def main_task() -> None:
         try:
             await module.main(*argv)
         finally:
@@ -96,7 +107,8 @@ async def aio_run(module, *argv):
 
     try:
         global_task = asyncio.create_task(main_task())
-        await stop_event.wait()
+        if stop_event:
+            await stop_event.wait()
     finally:
         for evt in after_stop_events:
             if asyncio.iscoroutinefunction(evt):
@@ -105,7 +117,7 @@ async def aio_run(module, *argv):
                 evt(module)
 
 
-def run(module, *argv):
+def run(module: Any, *argv: str) -> None:
     for evt in before_start_events:
         if asyncio.iscoroutinefunction(evt):
             asyncio.run(evt(module))
@@ -122,7 +134,12 @@ def run(module, *argv):
                 evt(module)
 
 
-def start(module_name, argv, process_id=None):
+def start(
+    module_name: str,
+    argv: List[str],
+    processes: Optional[int] = None,
+    process_id: Optional[int] = None,
+) -> None:
     formatter = "[%(asctime)s] %(name)s:%(lineno)d %(levelname)s - %(message)s"
     logging.basicConfig(level=logging.INFO, format=formatter)
     module_log = f'running module {module_name} {" ".join(argv)}'
@@ -132,6 +149,7 @@ def start(module_name, argv, process_id=None):
 
     if process_id is not None:
         os.environ['PROCESS_ID'] = str(process_id)
+        os.environ['PROCESSES'] = str(processes)
 
     if hasattr(module, 'parse_args'):
         argv = [module.parse_args(argv)]
@@ -145,11 +163,11 @@ def start(module_name, argv, process_id=None):
 
     t = round(time() - start_time, 4)
     logger.info(f'Spent: {t}s')
-    t = pretty_time(t)
-    logger.info(f'Spent: {t}')
+    t_s = pretty_time(int(t))
+    logger.info(f'Spent: {t_s}')
 
 
-def split_argv(argv):
+def split_argv(argv: List[str]) -> tuple[List[str], List[str]]:
     script_argv = []
     is_module_argv = False
     module_argv = []
@@ -178,18 +196,22 @@ def split_argv(argv):
     return script_argv, module_argv
 
 
-def main(script, *argv):
-    script_argv, module_argv = split_argv(argv)
+def main(script: str, *argv: str) -> None:
+    script_argv, module_argv = split_argv(list(argv))
     parser = argparse.ArgumentParser(description='Prepare and Run command.')
-    parser.add_argument('-p',
-                        '--processes',
-                        dest='processes',
-                        default=1,
-                        type=int,
-                        help='process size. default is 1')
-    parser.add_argument('module_name',
-                        type=str,
-                        help='module name or module file')
+    parser.add_argument(
+        '-p',
+        '--processes',
+        dest='processes',
+        default=1,
+        type=int,
+        help='process size. default is 1',
+    )
+    parser.add_argument(
+        'module_name',
+        type=str,
+        help='module name or module file',
+    )
     parser.add_argument('argv', nargs='*', help='module arguments')
 
     args = parser.parse_args(script_argv)
@@ -197,8 +219,10 @@ def main(script, *argv):
     if args.processes > 1:
         processes = []
         for i in range(args.processes):
-            p = Process(target=start,
-                        args=(args.module_name, module_argv, i + 1))
+            p = Process(
+                target=start,
+                args=(args.module_name, module_argv, args.processes, i + 1),
+            )
             p.start()
             processes.append(p)
 
