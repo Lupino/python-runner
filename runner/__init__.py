@@ -208,6 +208,13 @@ def main(script: str, *argv: str) -> None:
         help='process size. default is 1',
     )
     parser.add_argument(
+        '-w',
+        '--wait-all-stop',
+        dest='wait_all_stop',
+        action='store_true',
+        help='Wait all stop. default is False',
+    )
+    parser.add_argument(
         'module_name',
         type=str,
         help='module name or module file',
@@ -226,6 +233,11 @@ def main(script: str, *argv: str) -> None:
             p.start()
             processes.append(p)
 
+
+        if args.wait_all_stop:
+            for p in processes:
+                p.join()
+
         running = True
         while running:
             for p in processes:
@@ -233,6 +245,7 @@ def main(script: str, *argv: str) -> None:
                 if not p.is_alive():
                     running = False
                     break
+
         for p in processes:
             p.terminate()
             p.join(10)
