@@ -10,7 +10,7 @@ from importlib import import_module
 from importlib.util import module_from_spec, spec_from_file_location
 from multiprocessing import Process
 from time import time
-from typing import Any, Callable, Coroutine, List, Optional, Union
+from typing import Any, Awaitable, Callable, Coroutine, List, Optional, Union
 
 # Type definitions for better readability
 HookHandler = Union[
@@ -121,6 +121,11 @@ def _run_sync_hooks(module: Any, hooks: List[HookHandler]) -> None:
             evt(module)  # type: ignore
 
 
+async def _await_value(awaitable: Awaitable[Any]) -> Any:
+    """Normalizes generic awaitables into a coroutine result."""
+    return await awaitable
+
+
 async def aio_run(module: Any, *argv: str) -> None:
     """Runs an asynchronous module main function."""
     global stop_event, global_task
@@ -185,7 +190,7 @@ def start(
     if callable(parser_func):
         parsed_argv = parser_func(argv)
         if inspect.isawaitable(parsed_argv):
-            parsed_argv = asyncio.run(parsed_argv)
+            parsed_argv = asyncio.run(_await_value(parsed_argv))
         if isinstance(parsed_argv, (list, tuple)):
             run_argv = list(parsed_argv)
         else:

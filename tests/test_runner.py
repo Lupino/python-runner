@@ -5,12 +5,18 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from typing import Optional, Sequence
 
 import runner
 
 
 class RunnerTests(unittest.TestCase):
-    def _run_runner(self, module_name, *module_argv, prepend_sys_path=None):
+    def _run_runner(
+        self,
+        module_name: str,
+        *module_argv: str,
+        prepend_sys_path: Optional[Sequence[str]] = None,
+    ) -> str:
         old_path = list(sys.path)
         if prepend_sys_path:
             sys.path[:0] = list(prepend_sys_path)
@@ -23,9 +29,10 @@ class RunnerTests(unittest.TestCase):
         finally:
             sys.path[:] = old_path
 
-    def test_file_module_can_import_sibling_module(self):
+    def test_file_module_can_import_sibling_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with open(os.path.join(tmp, "helper.py"), "w", encoding="utf-8") as f:
+            helper_path = os.path.join(tmp, "helper.py")
+            with open(helper_path, "w", encoding="utf-8") as f:
                 f.write("VALUE = 42\n")
             target = os.path.join(tmp, "job.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -38,11 +45,12 @@ class RunnerTests(unittest.TestCase):
             output = self._run_runner(target)
             self.assertIn("42", output)
 
-    def test_slash_module_path_is_supported(self):
+    def test_slash_module_path_is_supported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pkg = os.path.join(tmp, "pkg")
             os.makedirs(pkg)
-            with open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8") as f:
+            init_path = os.path.join(pkg, "__init__.py")
+            with open(init_path, "w", encoding="utf-8") as f:
                 f.write("")
             with open(os.path.join(pkg, "m.py"), "w", encoding="utf-8") as f:
                 f.write("def main(*argv):\n    print('ok')\n")
@@ -50,7 +58,7 @@ class RunnerTests(unittest.TestCase):
             output = self._run_runner("pkg/m", prepend_sys_path=[tmp])
             self.assertIn("ok", output)
 
-    def test_file_module_does_not_poison_stdlib_module_name(self):
+    def test_file_module_does_not_poison_stdlib_module_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "json.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -62,7 +70,7 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue(hasattr(json, "dumps"))
             self.assertNotEqual(getattr(json, "__file__", ""), target)
 
-    def test_parse_args_list_is_expanded(self):
+    def test_parse_args_list_is_expanded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "job.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -76,7 +84,7 @@ class RunnerTests(unittest.TestCase):
             output = self._run_runner(target, "x")
             self.assertIn("('A', 'B')", output)
 
-    def test_non_callable_parse_args_is_ignored(self):
+    def test_non_callable_parse_args_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "job.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -89,7 +97,7 @@ class RunnerTests(unittest.TestCase):
             output = self._run_runner(target, "x")
             self.assertIn("('x',)", output)
 
-    def test_async_parse_args_is_awaited(self):
+    def test_async_parse_args_is_awaited(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "job.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -105,7 +113,7 @@ class RunnerTests(unittest.TestCase):
             output = self._run_runner(target, "x")
             self.assertIn("('A',)", output)
 
-    def test_failed_import_cleans_sys_modules(self):
+    def test_failed_import_cleans_sys_modules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "bad.py")
             with open(target, "w", encoding="utf-8") as f:
@@ -113,7 +121,9 @@ class RunnerTests(unittest.TestCase):
 
             module_id = (
                 "_runner_file_"
-                + hashlib.sha1(os.path.abspath(target).encode("utf-8")).hexdigest()
+                + hashlib.sha1(
+                    os.path.abspath(target).encode("utf-8")
+                ).hexdigest()
             )
 
             self.assertNotIn(module_id, sys.modules)
