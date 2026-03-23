@@ -1,13 +1,16 @@
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import signal
 import sys
+from hashlib import sha1
 from importlib import import_module
+from importlib.util import module_from_spec, spec_from_file_location
 from multiprocessing import Process
 from time import time
-from typing import Any, Callable, Coroutine, List, Optional, Tuple, Union
+from typing import Any, Callable, Coroutine, List, Optional, Union
 
 # Type definitions for better readability
 HookHandler = Union[
@@ -50,13 +53,44 @@ def sigint_handler(_sig: int, _frame: Any) -> None:
 
 def fixed_module_name(module_name: str) -> str:
     """Normalizes file paths to dotted module names."""
-    if os.path.isfile(module_name):
-        if module_name.endswith('.py'):
-            module_name = module_name[:-3]
-        if module_name.startswith('./'):
-            module_name = module_name[2:]
-        return module_name.replace('/', '.')
-    return module_name
+    if module_name.endswith('.py'):
+        module_name = module_name[:-3]
+    if module_name.startswith('./'):
+        module_name = module_name[2:]
+    module_name = module_name.replace('\\', '/').replace('/', '.')
+    return module_name.lstrip('.')
+
+
+def load_module(module_name: str) -> Any:
+    """Loads a module by dotted path or python file path."""
+    if not os.path.isfile(module_name):
+        return import_module(fixed_module_name(module_name))
+
+    file_path = os.path.abspath(module_name)
+    module_id = f'_runner_file_{sha1(file_path.encode("utf-8")).hexdigest()}'
+
+    spec = spec_from_file_location(module_id, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f'Cannot load module from file: {file_path}')
+
+    module = module_from_spec(spec)
+    # Match python script execution behavior for sibling imports.
+    module_dir = os.path.dirname(file_path)
+    path_added = False
+    if module_dir and module_dir not in sys.path:
+        sys.path.insert(0, module_dir)
+        path_added = True
+
+    try:
+        sys.modules[module_id] = module
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_id, None)
+        raise
+    finally:
+        if path_added and sys.path and sys.path[0] == module_dir:
+            sys.path.pop(0)
+    return module
 
 
 def before_start(evt: HookHandler) -> None:
@@ -138,7 +172,7 @@ def start(
     logger.info(f'Start {module_log}')
 
     start_time = time()
-    module = import_module(fixed_module_name(module_name))
+    module = load_module(module_name)
 
     if process_id is not None:
         os.environ['PROCESS_ID'] = str(process_id)
@@ -147,8 +181,15 @@ def start(
 
     # Allow module to parse its own arguments if supported
     run_argv = argv
-    if hasattr(module, 'parse_args'):
-        run_argv = [module.parse_args(argv)]
+    parser_func = getattr(module, 'parse_args', None)
+    if callable(parser_func):
+        parsed_argv = parser_func(argv)
+        if inspect.isawaitable(parsed_argv):
+            parsed_argv = asyncio.run(parsed_argv)
+        if isinstance(parsed_argv, (list, tuple)):
+            run_argv = list(parsed_argv)
+        else:
+            run_argv = [parsed_argv]
 
     if asyncio.iscoroutinefunction(module.main):
         asyncio.run(aio_run(module, *run_argv))
@@ -160,42 +201,8 @@ def start(
     logger.info(f'Spent: {round(duration, 4)}s ({pretty_time(duration)})')
 
 
-def split_argv(argv: List[str]) -> Tuple[List[str], List[str]]:
-    """Separates runner arguments from module arguments."""
-    script_argv: List[str] = []
-    module_argv: List[str] = []
-    is_module_part = False
-
-    # Skip the script name (argv[0]) when processing
-    for arg in argv:
-        if is_module_part:
-            module_argv.append(arg)
-            continue
-
-        if arg.startswith('-'):
-            script_argv.append(arg)
-            # Rough check: if it's a flag without '=', expect a value next
-            # This logic mimics the original behavior but is fragile
-            if '=' not in arg:
-                # In original logic, this might have consumed the next arg
-                # implicitly if the next arg wasn't a flag.
-                # Keeping it simple: Assume standard flags for now.
-                pass
-        else:
-            # First non-flag argument is treated as the module name start
-            module_argv.append(arg)
-            is_module_part = True
-
-    return script_argv, module_argv
-
-
 def main(script: str, *argv: str) -> None:
     """Main entry point for the CLI tool."""
-    # Split arguments: runner flags vs module name/flags
-    # We pass the full argv (excluding script name handled by caller usually)
-    # But here *argv usually comes from sys.argv[1:]
-    script_argv, module_argv = split_argv(list(argv))
-
     parser = argparse.ArgumentParser(description='Prepare and Run command.')
     parser.add_argument(
         '-p', '--processes',
@@ -207,22 +214,16 @@ def main(script: str, *argv: str) -> None:
         dest='wait_all_stop', action='store_true',
         help='Wait for all processes to stop. Default is False.'
     )
-    # The module name is technically in module_argv[0] after split,
-    # but argparse needs to parse script_argv.
-    # We reconstruct logic manually because argparse expects module_name.
+    parser.add_argument('module_name', help='Python module path to run.')
+    parser.add_argument(
+        'module_argv',
+        nargs=argparse.REMAINDER,
+        help='Arguments passed through to the target module.',
+    )
 
-    # Correction: The original split_argv logic was specific.
-    # To satisfy the 79 char limit and logic, we use the parsed script args
-    # and manually handle the module execution.
-
-    args, unknown = parser.parse_known_args(script_argv)
-
-    if not module_argv:
-        parser.print_help()
-        return
-
-    target_module = module_argv[0]
-    target_args = module_argv[1:]
+    args = parser.parse_args(list(argv))
+    target_module = args.module_name
+    target_args = args.module_argv
 
     # Logic for single process
     if args.processes <= 1:
